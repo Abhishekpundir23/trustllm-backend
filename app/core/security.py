@@ -1,13 +1,13 @@
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
 from jose import jwt
+from app.core.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES  # Import config
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-SECRET_KEY = "CHANGE_ME_LATER"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
-
+# REMOVED: SECRET_KEY = "CHANGE_ME_LATER"
+# REMOVED: ALGORITHM = "HS256"
+# REMOVED: ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)

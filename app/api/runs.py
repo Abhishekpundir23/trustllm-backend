@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from datetime import datetime # Added import
 
 from app.db.deps import get_db
 from app.core.dependencies import get_current_user
@@ -13,6 +14,7 @@ from app.services.evaluation_engine import mock_llm, score_response
 
 router = APIRouter(prefix="/projects/{project_id}/run", tags=["Evaluation"],
     dependencies=[Depends(get_current_user)])
+
 @router.post("/", response_model=RunSummary)
 def run_evaluation(
     project_id: str,
@@ -40,7 +42,8 @@ def run_evaluation(
     # 3. Create model run
     run = ModelRun(
         project_id=project_id,
-        model_name=payload.model_name
+        model_name=payload.model_name,
+        status="running" # Set initial status to running
     )
     db.add(run)
     db.commit()
@@ -50,30 +53,39 @@ def run_evaluation(
     incorrect = 0
 
     # 4. Evaluate each test
-    for test in tests:
-        output = mock_llm(test.prompt, payload.model_name)
-        score, category = score_response(output, test)
+    try:
+        for test in tests:
+            output = mock_llm(test.prompt, payload.model_name)
+            score, category = score_response(output, test)
 
-        if score == 2:
-            correct += 1
-        else:
-            incorrect += 1
+            if score == 2:
+                correct += 1
+            else:
+                incorrect += 1
 
-        result = EvaluationResult(
-            model_run_id=run.id,
-            test_case_id=test.id,
-            model_output=output,
-            score=score,
-            category=category
-        )
+            result = EvaluationResult(
+                model_run_id=run.id,
+                test_case_id=test.id,
+                model_output=output,
+                score=score,
+                category=category
+            )
+            db.add(result)
+        
+        # 5. Update run status on success
+        run.status = "completed"
+        run.completed_at = datetime.utcnow()
+        db.commit()
 
-        db.add(result)
+    except Exception as e:
+        # Mark as failed if something breaks
+        run.status = "failed"
+        db.commit()
+        raise e
 
-    db.commit()
-
-    # 5. Return summary
+    # 6. Return summary
     return RunSummary(
-        run_id=run.id,
+        run_id=str(run.id), # Ensure UUID is cast to string
         model_name=payload.model_name,
         total_tests=len(tests),
         correct=correct,

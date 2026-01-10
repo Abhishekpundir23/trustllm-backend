@@ -15,8 +15,8 @@ def get_current_user(
 ):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("sub")
-        if user_id is None:
+        user_email = payload.get("sub")  # Changed variable name to reflect it's an email
+        if user_email is None:
             raise HTTPException(status_code=401, detail="Invalid token")
     except JWTError:
         raise HTTPException(
@@ -24,7 +24,9 @@ def get_current_user(
             detail="Invalid token"
         )
 
-    user = db.query(User).filter(User.id == user_id).first()
+    # FIXED: Query by User.email, not User.id
+    user = db.query(User).filter(User.email == user_email).first()
+    
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
 
