@@ -8,7 +8,7 @@ class TestCaseCreate(BaseModel):
     expected: Optional[str] = None
 
 class TestCaseResponse(BaseModel):
-    id: str
+    id: int  # <--- FIXED: Changed from str to int
     prompt: str
     task_type: str
     rules: Optional[Dict]

@@ -5,7 +5,7 @@ class ProjectCreate(BaseModel):
     domain: str = "general"
 
 class ProjectResponse(BaseModel):
-    id: str
+    id: int  # <--- FIXED: Changed from str to int
     name: str
     domain: str
 
