@@ -159,18 +159,23 @@ def list_runs(
 
     return summaries
 # ... inside app/api/runs.py
-
 @router.get("/{run_id}/details")
 def get_run_details(
-    run_id: int,
+    run_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Join EvaluationResult with TestCase to get the prompt text
+    # 1. Convert the String ID to a real UUID object
+    try:
+        real_run_id = UUID(run_id) 
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+    # 2. Use the UUID object in the query
     results = db.query(EvaluationResult, TestCase).join(
         TestCase, EvaluationResult.test_case_id == TestCase.id
     ).filter(
-        EvaluationResult.model_run_id == run_id
+        EvaluationResult.model_run_id == real_run_id 
     ).all()
 
     details = []
@@ -179,7 +184,7 @@ def get_run_details(
             "test_id": test.id,
             "prompt": test.prompt,
             "expected": test.expected,
-            "output": res.output,
+            "output": res.model_output,  # Ensure this matches your model field name (model_output vs output)
             "score": res.score
         })
     return details
