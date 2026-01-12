@@ -116,7 +116,73 @@ def run_evaluation(
         correct=correct,
         incorrect=incorrect
     )
+# ... (keep all imports and existing code)
 
+@router.get("/", response_model=list[RunSummary])
+def list_runs(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # 1. Verify Project
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
+    
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # 2. Get all runs for this project (newest first)
+    runs = db.query(ModelRun).filter(
+        ModelRun.project_id == project_id
+    ).order_by(ModelRun.started_at.desc()).all()
+
+    # 3. Calculate summary stats for each run
+    summaries = []
+    for run in runs:
+        # Count results
+        total = db.query(EvaluationResult).filter(EvaluationResult.model_run_id == run.id).count()
+        correct = db.query(EvaluationResult).filter(
+            EvaluationResult.model_run_id == run.id, 
+            EvaluationResult.score == 2
+        ).count()
+        
+        summaries.append(RunSummary(
+            run_id=str(run.id),
+            model_name=run.model_name,
+            prompt_version_id=run.prompt_version_id,
+            total_tests=total,
+            correct=correct,
+            incorrect=total - correct
+        ))
+
+    return summaries
+# ... inside app/api/runs.py
+
+@router.get("/{run_id}/details")
+def get_run_details(
+    run_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Join EvaluationResult with TestCase to get the prompt text
+    results = db.query(EvaluationResult, TestCase).join(
+        TestCase, EvaluationResult.test_case_id == TestCase.id
+    ).filter(
+        EvaluationResult.model_run_id == run_id
+    ).all()
+
+    details = []
+    for res, test in results:
+        details.append({
+            "test_id": test.id,
+            "prompt": test.prompt,
+            "expected": test.expected,
+            "output": res.output,
+            "score": res.score
+        })
+    return details
 @router.get("/compare", response_model=ComparisonResponse)
 def compare_runs(
     project_id: int,
