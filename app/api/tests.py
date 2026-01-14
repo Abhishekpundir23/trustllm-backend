@@ -10,9 +10,10 @@ from app.schemas.test_case import TestCaseCreate, TestCaseResponse
 
 router = APIRouter(prefix="/projects/{project_id}/tests", tags=["Test Cases"],
     dependencies=[Depends(get_current_user)])
+
 @router.post("/", response_model=TestCaseResponse)
 def create_test_case(
-    project_id: str,
+    project_id: int,  # <--- CHANGED FROM str TO int
     test: TestCaseCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -40,9 +41,10 @@ def create_test_case(
     db.refresh(new_test)
 
     return new_test
+
 @router.get("/", response_model=list[TestCaseResponse])
 def list_test_cases(
-    project_id: str,
+    project_id: int,  # <--- CHANGED FROM str TO int
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -60,10 +62,11 @@ def list_test_cases(
     ).all()
 
     return tests
+
 @router.delete("/{test_id}", status_code=204)
 def delete_test_case(
-    project_id: str,
-    test_id: str,
+    project_id: int,  # <--- CHANGED FROM str TO int
+    test_id: int,     # <--- Ensure this is int too (usually IDs are ints)
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):

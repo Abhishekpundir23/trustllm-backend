@@ -1,3 +1,4 @@
+from app.models.prompt import PromptVersion # <--- Add this import
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from datetime import datetime
@@ -12,7 +13,7 @@ from app.models.model_run import ModelRun
 from app.models.evaluation_result import EvaluationResult
 from app.schemas.run import RunRequest, RunSummary
 from app.schemas.compare import ComparisonResponse, ComparisonRow
-from app.services.evaluation_engine import mock_llm, score_response
+from app.services.evaluation_engine import evaluate
 
 # Handle PromptVersion import gracefully
 try:
@@ -39,17 +40,16 @@ def run_evaluation(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # 2. Get Prompt Template (if provided and model exists)
-    prompt_template = "{{prompt}}"
-    # Safe check: ensure payload has the field and PromptVersion model is loaded
-    if hasattr(payload, 'prompt_version_id') and payload.prompt_version_id and PromptVersion:
+    # 2. Get Prompt Template (if provided)
+    system_template = None
+    # Check if prompt_version_id exists in payload and is not None
+    if getattr(payload, 'prompt_version_id', None) and PromptVersion:
         prompt_version = db.query(PromptVersion).filter(
             PromptVersion.id == payload.prompt_version_id,
             PromptVersion.project_id == project_id
         ).first()
-        if not prompt_version:
-            raise HTTPException(status_code=404, detail="Prompt version not found")
-        prompt_template = prompt_version.template
+        if prompt_version:
+            system_template = prompt_version.template
 
     # 3. Load test cases
     tests = db.query(TestCase).filter(
@@ -59,11 +59,10 @@ def run_evaluation(
     if not tests:
         raise HTTPException(status_code=400, detail="No test cases found")
 
-    # 4. Create model run
+    # 4. Create model run record
     run = ModelRun(
         project_id=project_id,
         model_name=payload.model_name,
-        # UNCOMMENTED: Save the prompt version ID to the database
         prompt_version_id=getattr(payload, "prompt_version_id", None),
         status="running"
     )
@@ -71,53 +70,43 @@ def run_evaluation(
     db.commit()
     db.refresh(run)
 
-    correct = 0
-    incorrect = 0
-
-    # 5. Evaluate each test
+    # 5. Run Evaluation (Call the new engine!)
     try:
-        for test in tests:
-            # Inject test prompt into the template
-            final_prompt = prompt_template.replace("{{prompt}}", test.prompt)
-            
-            output = mock_llm(final_prompt, payload.model_name)
-            score, category = score_response(output, test)
+        # This calls OpenAI with the pirate template (if selected)
+        results = evaluate(tests, payload.model_name, system_template)
 
-            if score == 2:
-                correct += 1
-            else:
-                incorrect += 1
-
-            result = EvaluationResult(
+        # 6. Save Results to Database
+        for res in results:
+            db_res = EvaluationResult(
                 model_run_id=run.id,
-                test_case_id=test.id,
-                model_output=output,
-                score=score,
-                category=category
+                test_case_id=res["test_id"],
+                model_output=res["output"],
+                score=res["score"],
+                category=res["category"]
             )
-            db.add(result)
+            db.add(db_res)
         
         run.status = "completed"
         run.completed_at = datetime.utcnow()
         db.commit()
 
+        # 7. Calculate Summary
+        correct = sum(1 for r in results if r["score"] == 2)
+        
+        return RunSummary(
+            run_id=str(run.id),
+            model_name=payload.model_name,
+            prompt_version_id=getattr(payload, "prompt_version_id", None),
+            total_tests=len(tests),
+            correct=correct,
+            incorrect=len(tests) - correct
+        )
+
     except Exception as e:
         run.status = "failed"
         db.commit()
         raise e
-
-    # 6. Return summary
-    return RunSummary(
-        run_id=str(run.id),
-        model_name=payload.model_name,
-        # UNCOMMENTED: Return the prompt version ID in the response
-        prompt_version_id=getattr(payload, "prompt_version_id", None),
-        total_tests=len(tests),
-        correct=correct,
-        incorrect=incorrect
-    )
-# ... (keep all imports and existing code)
-
+    
 @router.get("/", response_model=list[RunSummary])
 def list_runs(
     project_id: int,
