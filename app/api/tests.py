@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-
+from fastapi import UploadFile, File
+import csv
+import io
 from app.db.deps import get_db
 from app.core.dependencies import get_current_user
 from app.models.user import User
@@ -81,3 +83,38 @@ def delete_test_case(
 
     db.delete(test)
     db.commit()
+    
+@router.post("/import")
+def import_tests(
+    project_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # 1. Verify Project
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # 2. Read & Parse CSV
+    content = file.file.read().decode("utf-8")
+    csv_reader = csv.DictReader(io.StringIO(content))
+    
+    count = 0
+    for row in csv_reader:
+        # Expecting CSV columns: prompt, expected, task_type
+        if "prompt" in row:
+            test_case = TestCase(
+                project_id=project_id,
+                prompt=row["prompt"],
+                expected=row.get("expected", ""),
+                task_type=row.get("task_type", "general")
+            )
+            db.add(test_case)
+            count += 1
+            
+    db.commit()
+    return {"message": f"Successfully imported {count} test cases"}   
