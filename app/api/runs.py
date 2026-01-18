@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException, Body # <--- Add Body
 # REMOVED: from uuid import UUID (No longer needed)
 
 from app.db.deps import get_db
@@ -242,3 +243,39 @@ def compare_runs(
         run2_name=run2.model_name,
         comparisons=comparison_rows
     )
+# ... existing code ...
+
+@router.put("/{run_id}/results/{test_id}")
+def update_result_score(
+    project_id: int,
+    run_id: int,
+    test_id: int,
+    score: int = Body(..., embed=True), # Expects JSON: { "score": 2 }
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # 1. Verify Project Access
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # 2. Find the specific result
+    result = db.query(EvaluationResult).filter(
+        EvaluationResult.model_run_id == run_id,
+        EvaluationResult.test_case_id == test_id
+    ).first()
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Result not found")
+
+    # 3. Update the score
+    result.score = score
+    # Optional: Mark it as manually overridden
+    result.category = "manual_override" 
+    
+    db.commit()
+    
+    return {"status": "success", "new_score": score}
