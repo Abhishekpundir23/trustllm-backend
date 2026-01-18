@@ -7,8 +7,11 @@ class TestCase(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     
-    # Replaced 'name' with the actual fields used in your API and Schema
     prompt = Column(Text, nullable=False)
+    
+    # 👇 NEW: Context for RAG tests (The source text the AI should use)
+    context = Column(Text, nullable=True) 
+    
     task_type = Column(String, nullable=False)
     rules = Column(JSON, nullable=True)
     expected = Column(Text, nullable=True)

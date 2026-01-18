@@ -111,6 +111,8 @@ def import_tests(
                 project_id=project_id,
                 prompt=row["prompt"],
                 expected=row.get("expected", ""),
+                # 👇 NEW: Capture context from CSV
+                context=row.get("context", ""), 
                 task_type=row.get("task_type", "general")
             )
             db.add(test_case)
