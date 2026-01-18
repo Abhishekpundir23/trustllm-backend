@@ -12,6 +12,10 @@ if api_key:
 
 def evaluate(test_cases, model_name, system_template=None):
     results = []
+    
+    # Track Total Tokens for this entire run
+    total_input = 0
+    total_output = 0
 
     for test in test_cases:
         # 1. Prepare Prompt
@@ -19,10 +23,15 @@ def evaluate(test_cases, model_name, system_template=None):
         if system_template:
             content = system_template.replace("{{prompt}}", test.prompt)
 
-        # 2. Call Gemini (The Student)
-        output = call_gemini_safe(content)
+        # 2. Call Gemini (Get Text AND Usage)
+        output, usage = call_gemini_with_usage(content)
         
-        # 3. Score it (The Teacher) <--- UPDATED
+        # Accumulate usage stats if available
+        if usage:
+            total_input += usage.prompt_token_count
+            total_output += usage.candidates_token_count
+
+        # 3. Score it (The Teacher)
         score, category = score_response_smart(output, test)
 
         results.append({
@@ -32,11 +41,12 @@ def evaluate(test_cases, model_name, system_template=None):
             "category": category,
         })
 
-    return results
+    # Return Results AND Token Counts
+    return results, total_input, total_output
 
-def call_gemini_safe(prompt):
+def call_gemini_with_usage(prompt):
     """
-    Calls Google Gemini API. Falls back to Mock if it fails.
+    Calls Google Gemini API. Returns (text, usage_metadata).
     """
     try:
         if not client:
@@ -47,11 +57,20 @@ def call_gemini_safe(prompt):
             model='gemini-flash-latest', 
             contents=prompt
         )
-        return response.text
+        return response.text, response.usage_metadata
 
     except Exception as e:
         print(f"⚠️ Gemini Failed: {e}")
-        return f"[Mock Fallback] (Real AI Failed: {str(e)}) | Response to: {prompt}"
+        # Return error text and None for usage
+        return f"[Mock Fallback] (Real AI Failed: {str(e)}) | Response to: {prompt}", None
+
+def call_gemini_safe(prompt):
+    """
+    Simple wrapper for internal grading calls (doesn't track usage for simplicity, 
+    or you could add tracking here too if you want strict accounting).
+    """
+    text, _ = call_gemini_with_usage(prompt)
+    return text
 
 def score_response_smart(output: str, test_case) -> tuple[int, str]:
     """
@@ -64,12 +83,10 @@ def score_response_smart(output: str, test_case) -> tuple[int, str]:
         return 2, "correct" # No expectation = Pass
 
     # 1. FAST CHECK: If the exact text is found, pass immediately.
-    # (e.g. Expected "7", Output "It be 7 colors") -> Pass
     if expected.lower() in output.lower():
         return 2, "correct"
     
     # 2. SMART CHECK: If fast check fails, ask the AI Judge.
-    # (e.g. Expected "7", Output "Seven colors") -> AI will fix this.
     try:
         print(f"🕵️ Fast check failed. Asking AI Judge to grade: '{expected}' vs '{output[:20]}...'")
         
@@ -87,7 +104,7 @@ def score_response_smart(output: str, test_case) -> tuple[int, str]:
         Reply strictly with 'YES' or 'NO'.
         """
         
-        # We reuse the safe caller to do the grading!
+        # Reuse safe caller (Judge usage is generally small, ignoring for now)
         verdict = call_gemini_safe(grading_prompt)
         
         if "YES" in verdict.upper():
