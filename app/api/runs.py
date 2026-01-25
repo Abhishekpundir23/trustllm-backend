@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.orm import Session
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, Body # <--- Add Body
-# REMOVED: from uuid import UUID (No longer needed)
+import csv
+from fastapi.responses import StreamingResponse
+import io
 
 from app.db.deps import get_db
 from app.core.dependencies import get_current_user
@@ -73,8 +74,20 @@ def run_evaluation(
 
     # 5. Run Evaluation
     try:
-        # Results + Token Usage
-        results, input_tokens, output_tokens = evaluate(tests, payload.model_name, system_template)
+        # 👇 NEW: Extract User Keys
+        user_keys = {
+            "openai": current_user.openai_key,
+            "anthropic": current_user.anthropic_key,
+            "gemini": current_user.gemini_key
+        }
+
+        # 👇 UPDATED: Pass keys to evaluate function
+        results, input_tokens, output_tokens = evaluate(
+            test_cases=tests, 
+            model_name=payload.model_name, 
+            api_keys=user_keys, 
+            system_template=system_template
+        )
 
         # Cost Calculation
         cost = (input_tokens / 1_000_000 * 0.075) + (output_tokens / 1_000_000 * 0.30)
@@ -107,7 +120,6 @@ def run_evaluation(
             total_tests=len(tests),
             correct=correct,
             incorrect=len(tests) - correct,
-            # 👇 ADD THESE 3 LINES 👇
             total_input_tokens=run.total_input_tokens,
             total_output_tokens=run.total_output_tokens,
             estimated_cost=run.estimated_cost
@@ -152,7 +164,6 @@ def list_runs(
             total_tests=total,
             correct=correct,
             incorrect=total - correct,
-            # 👇 ADD THESE 3 LINES 👇
             total_input_tokens=run.total_input_tokens,
             total_output_tokens=run.total_output_tokens,
             estimated_cost=run.estimated_cost
@@ -160,15 +171,12 @@ def list_runs(
 
     return summaries
 
-# --- FIXED: CHANGED run_id to INT ---
 @router.get("/{run_id}/details")
 def get_run_details(
-    run_id: int,  # <--- FIXED: Now expects an Integer
+    run_id: int, 
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # REMOVED UUID conversion logic
-    
     results = db.query(EvaluationResult, TestCase).join(
         TestCase, EvaluationResult.test_case_id == TestCase.id
     ).filter(
@@ -182,16 +190,16 @@ def get_run_details(
             "prompt": test.prompt,
             "expected": test.expected,
             "output": res.model_output,
-            "score": res.score
+            "score": res.score,
+            "category": res.category
         })
     return details
 
-# --- FIXED: CHANGED run_ids to INT ---
 @router.get("/compare", response_model=ComparisonResponse)
 def compare_runs(
     project_id: int,
-    run_id_1: int, # <--- FIXED
-    run_id_2: int, # <--- FIXED
+    run_id_1: int,
+    run_id_2: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -202,8 +210,6 @@ def compare_runs(
     
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-
-    # REMOVED UUID conversion logic
 
     run1 = db.query(ModelRun).filter(ModelRun.id == run_id_1, ModelRun.project_id == project_id).first()
     run2 = db.query(ModelRun).filter(ModelRun.id == run_id_2, ModelRun.project_id == project_id).first()
@@ -243,18 +249,16 @@ def compare_runs(
         run2_name=run2.model_name,
         comparisons=comparison_rows
     )
-# ... existing code ...
 
 @router.put("/{run_id}/results/{test_id}")
 def update_result_score(
     project_id: int,
     run_id: int,
     test_id: int,
-    score: int = Body(..., embed=True), # Expects JSON: { "score": 2 }
+    score: int = Body(..., embed=True),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # 1. Verify Project Access
     project = db.query(Project).filter(
         Project.id == project_id,
         Project.user_id == current_user.id
@@ -262,7 +266,6 @@ def update_result_score(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # 2. Find the specific result
     result = db.query(EvaluationResult).filter(
         EvaluationResult.model_run_id == run_id,
         EvaluationResult.test_case_id == test_id
@@ -271,11 +274,53 @@ def update_result_score(
     if not result:
         raise HTTPException(status_code=404, detail="Result not found")
 
-    # 3. Update the score
     result.score = score
-    # Optional: Mark it as manually overridden
     result.category = "manual_override" 
     
     db.commit()
     
     return {"status": "success", "new_score": score}
+
+@router.get("/{run_id}/export/csv")
+def export_run_csv(
+    project_id: int,
+    run_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    run = db.query(ModelRun).filter(ModelRun.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+        
+    results = db.query(EvaluationResult, TestCase).join(
+        TestCase, EvaluationResult.test_case_id == TestCase.id
+    ).filter(
+        EvaluationResult.model_run_id == run_id
+    ).all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    writer.writerow(["Test ID", "Task Type", "Prompt", "Context (RAG)", "Expected", "Model Output", "Score", "Pass/Fail", "Category"])
+    
+    for res, test in results:
+        status = "PASS" if res.score == 2 else "FAIL"
+        writer.writerow([
+            test.id,
+            test.task_type,
+            test.prompt,
+            test.context or "N/A",
+            test.expected,
+            res.model_output,
+            res.score,
+            status,
+            res.category
+        ])
+    
+    output.seek(0)
+    
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode()),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=run_{run_id}_report.csv"}
+    )

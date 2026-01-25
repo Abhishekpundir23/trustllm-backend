@@ -7,3 +7,8 @@ passlib[bcrypt]
 pydantic
 python-dotenv
 python-multipart
+requests
+# 👇 NEW AI SDKs (Critical for Phase 6)
+google-generativeai
+openai
+anthropic

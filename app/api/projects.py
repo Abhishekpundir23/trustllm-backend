@@ -132,3 +132,39 @@ def get_project_health(
         regression_score=round(regression_score, 2),
         worst_failing_tests=worst_tests
     )
+
+# 👇 NEW: Delete Project Endpoint
+@router.delete("/{project_id}")
+def delete_project(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # 1. Verify Project Ownership
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
+
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # 2. Cascade Delete (Manually deleting children to be safe)
+    # Delete Evaluation Results linked to this project's runs
+    db.query(EvaluationResult).filter(
+        EvaluationResult.model_run_id.in_(
+            db.query(ModelRun.id).filter(ModelRun.project_id == project_id)
+        )
+    ).delete(synchronize_session=False)
+
+    # Delete Model Runs
+    db.query(ModelRun).filter(ModelRun.project_id == project_id).delete(synchronize_session=False)
+
+    # Delete Test Cases
+    db.query(TestCase).filter(TestCase.project_id == project_id).delete(synchronize_session=False)
+
+    # 3. Delete Project
+    db.delete(project)
+    db.commit()
+
+    return {"status": "success", "message": f"Project {project_id} deleted"}
